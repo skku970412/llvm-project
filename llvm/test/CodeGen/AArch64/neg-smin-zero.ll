@@ -12,8 +12,8 @@
 define i32 @neg_smin_zero_i32(i32 %x) {
 ; CHECK-LABEL: neg_smin_zero_i32:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    and w8, w0, w0, asr #31
-; CHECK-NEXT:    neg w0, w8
+; CHECK-NEXT:    neg w8, w0
+; CHECK-NEXT:    and w0, w8, w0, asr #31
 ; CHECK-NEXT:    ret
   %m = call i32 @llvm.smin.i32(i32 %x, i32 0)
   %n = sub i32 0, %m
@@ -23,8 +23,8 @@ define i32 @neg_smin_zero_i32(i32 %x) {
 define i64 @neg_smin_zero_i64(i64 %x) {
 ; CHECK-LABEL: neg_smin_zero_i64:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    and x8, x0, x0, asr #63
-; CHECK-NEXT:    neg x0, x8
+; CHECK-NEXT:    neg x8, x0
+; CHECK-NEXT:    and x0, x8, x0, asr #63
 ; CHECK-NEXT:    ret
   %m = call i64 @llvm.smin.i64(i64 %x, i64 0)
   %n = sub i64 0, %m
@@ -35,8 +35,8 @@ define i64 @neg_smin_zero_i64(i64 %x) {
 define i32 @neg_smin_zero_commuted(i32 %x) {
 ; CHECK-LABEL: neg_smin_zero_commuted:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    and w8, w0, w0, asr #31
-; CHECK-NEXT:    neg w0, w8
+; CHECK-NEXT:    neg w8, w0
+; CHECK-NEXT:    and w0, w8, w0, asr #31
 ; CHECK-NEXT:    ret
   %m = call i32 @llvm.smin.i32(i32 0, i32 %x)
   %n = sub i32 0, %m
@@ -46,8 +46,8 @@ define i32 @neg_smin_zero_commuted(i32 %x) {
 define i32 @neg_smax_zero_i32(i32 %x) {
 ; CHECK-LABEL: neg_smax_zero_i32:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    bic w8, w0, w0, asr #31
-; CHECK-NEXT:    neg w0, w8
+; CHECK-NEXT:    neg w8, w0
+; CHECK-NEXT:    bic w0, w8, w0, asr #31
 ; CHECK-NEXT:    ret
   %m = call i32 @llvm.smax.i32(i32 %x, i32 0)
   %n = sub i32 0, %m
@@ -57,8 +57,8 @@ define i32 @neg_smax_zero_i32(i32 %x) {
 define i64 @neg_smax_zero_i64(i64 %x) {
 ; CHECK-LABEL: neg_smax_zero_i64:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    bic x8, x0, x0, asr #63
-; CHECK-NEXT:    neg x0, x8
+; CHECK-NEXT:    neg x8, x0
+; CHECK-NEXT:    bic x0, x8, x0, asr #63
 ; CHECK-NEXT:    ret
   %m = call i64 @llvm.smax.i64(i64 %x, i64 0)
   %n = sub i64 0, %m
@@ -139,6 +139,41 @@ define i32 @neg_smin_nonzero(i32 %x) {
   %m = call i32 @llvm.smin.i32(i32 %x, i32 5)
   %n = sub i32 0, %m
   ret i32 %n
+}
+
+; The compare feeds a select (SELECT_CC), not a bare SETCC; the negate still
+; folds into a cmn, so the fold must stay suppressed here too.
+define i32 @neg_smax_select(i32 %x, i32 %y, i32 %a, i32 %b) {
+; CHECK-LABEL: neg_smax_select:
+; CHECK:       // %bb.0:
+; CHECK-NEXT:    bic w8, w0, w0, asr #31
+; CHECK-NEXT:    cmn w1, w8
+; CHECK-NEXT:    csel w0, w2, w3, lt
+; CHECK-NEXT:    ret
+  %m = call i32 @llvm.smax.i32(i32 %x, i32 0)
+  %n = sub i32 0, %m
+  %c = icmp sgt i32 %n, %y
+  %s = select i1 %c, i32 %a, i32 %b
+  ret i32 %s
+}
+
+; Same for a conditional branch (BR_CC).
+define i32 @neg_smax_br(i32 %x, i32 %y, i32 %a, i32 %b) {
+; CHECK-LABEL: neg_smax_br:
+; CHECK:       // %bb.0: // %entry
+; CHECK-NEXT:    bic w8, w0, w0, asr #31
+; CHECK-NEXT:    cmn w1, w8
+; CHECK-NEXT:    csel w0, w2, w3, lt
+; CHECK-NEXT:    ret
+entry:
+  %m = call i32 @llvm.smax.i32(i32 %x, i32 0)
+  %n = sub i32 0, %m
+  %c = icmp sgt i32 %n, %y
+  br i1 %c, label %t, label %f
+t:
+  ret i32 %a
+f:
+  ret i32 %b
 }
 
 declare i32 @llvm.smin.i32(i32, i32)

@@ -23425,6 +23425,53 @@ static SDValue performAddCombineForShiftedOperands(SDNode *N,
   return SDValue();
 }
 
+// (sub 0, (smin X, 0)) --> (and (sub 0, X), (sra X, bw-1))
+// (sub 0, (smax X, 0)) --> (and (sub 0, X), (not (sra X, bw-1)))
+// smin(X,0)/smax(X,0) select to (X & M)/(X & ~M) with sign mask M = X sra bw-1.
+// Since M is 0/-1 the negate distributes: -(X & M) == (-X) & M. The latter
+// keeps the shift off the negate's critical path so both issue in parallel;
+// same count.
+static SDValue performNegSMinMaxZeroCombine(SDNode *N, SelectionDAG &DAG) {
+  if (N->getOpcode() != ISD::SUB || !isNullConstant(N->getOperand(0)))
+    return SDValue();
+
+  SDValue MinMax = N->getOperand(1);
+  unsigned Opc = MinMax.getOpcode();
+  if ((Opc != ISD::SMIN && Opc != ISD::SMAX) || !MinMax.hasOneUse())
+    return SDValue();
+
+  // AArch64 AND/BIC with a shifted register is only available for i32/i64.
+  EVT VT = N->getValueType(0);
+  if (VT != MVT::i32 && VT != MVT::i64)
+    return SDValue();
+
+  // If the negate feeds a comparison it folds into a cmn for free; hoisting it
+  // ahead of the sign mask would defeat that and cost an instruction.
+  if (any_of(N->users(), [](const SDNode *U) {
+        unsigned UOpc = U->getOpcode();
+        return UOpc == ISD::SETCC || UOpc == ISD::SELECT_CC ||
+               UOpc == ISD::BR_CC;
+      }))
+    return SDValue();
+
+  SDValue X;
+  if (isNullConstant(MinMax.getOperand(1)))
+    X = MinMax.getOperand(0);
+  else if (isNullConstant(MinMax.getOperand(0)))
+    X = MinMax.getOperand(1);
+  else
+    return SDValue();
+
+  SDLoc DL(N);
+  SDValue NegX = DAG.getNegative(X, DL, VT);
+  SDValue Mask = DAG.getNode(ISD::SRA, DL, VT, X,
+                             DAG.getConstant(VT.getSizeInBits() - 1, DL, VT));
+  // smax(X,0) masks with the complement of the sign mask (selects to BIC).
+  if (Opc == ISD::SMAX)
+    Mask = DAG.getNOT(DL, Mask, VT);
+  return DAG.getNode(ISD::AND, DL, VT, NegX, Mask);
+}
+
 // The mid end will reassociate sub(sub(x, m1), m2) to sub(x, add(m1, m2))
 // This reassociates it back to allow the creation of more mls instructions.
 static SDValue performSubAddMULCombine(SDNode *N, SelectionDAG &DAG) {
@@ -23956,6 +24003,8 @@ static SDValue performAddSubCombine(SDNode *N,
   if (SDValue Val = performVectorExtCombine(N, DCI.DAG))
     return Val;
   if (SDValue Val = performAddCombineForShiftedOperands(N, DCI.DAG))
+    return Val;
+  if (SDValue Val = performNegSMinMaxZeroCombine(N, DCI.DAG))
     return Val;
   if (SDValue Val = performSubAddMULCombine(N, DCI.DAG))
     return Val;
